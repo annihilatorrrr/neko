@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"math"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -74,8 +74,9 @@ func (m *neko) playSound(soundName string) {
 	if !ok {
 		return
 	}
-	if m.currentPlayer != nil && m.currentPlayer.IsPlaying() {
+	if m.currentPlayer != nil {
 		_ = m.currentPlayer.Close()
+		m.currentPlayer = nil
 	}
 	m.currentPlayer = m.audioContext.NewPlayerFromBytes(sound)
 	m.currentPlayer.SetVolume(soundVolume)
@@ -129,10 +130,10 @@ func (m *neko) Update() error {
 func (m *neko) stayIdle() {
 	// idle state
 	switch m.state {
-	case 0:
-		m.state = 1
-		m.sprite = "awake"
-	case 1, 2, 3:
+	case 0, 1, 2, 3:
+		if m.state == 0 {
+			m.state = 1
+		}
 		m.sprite = "awake"
 
 	case 4, 5, 6:
@@ -242,14 +243,14 @@ func loadAssets(assetsFS fs.FS, sampleRate int) (map[string]*ebiten.Image, map[s
 			continue
 		}
 
-		path := filepath.Join("assets", entry.Name())
-		data, err := fs.ReadFile(assetsFS, path)
+		assetPath := path.Join("assets", entry.Name())
+		data, err := fs.ReadFile(assetsFS, assetPath)
 		if err != nil {
-			return nil, nil, fmt.Errorf("read %q: %w", path, err)
+			return nil, nil, fmt.Errorf("read %q: %w", assetPath, err)
 		}
 
-		name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-		switch filepath.Ext(entry.Name()) {
+		name := strings.TrimSuffix(entry.Name(), path.Ext(entry.Name()))
+		switch path.Ext(entry.Name()) {
 		case ".png":
 			img, _, err := image.Decode(bytes.NewReader(data))
 			if err != nil {
