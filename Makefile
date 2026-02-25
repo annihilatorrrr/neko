@@ -5,7 +5,8 @@
 	#GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
 	#go build -o dist/neko_linux_amd64
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 \
-    go build -a -ldflags '-s -w' -o dist/neko_darwin_arm64
+	CGO_CFLAGS="$(CGO_CFLAGS) -Wno-error=deprecated-declarations -Wno-deprecated-declarations" \
+	go build -a -ldflags '-s -w' -o dist/neko_darwin_arm64
 
 @clean:
 	rm -rf dist

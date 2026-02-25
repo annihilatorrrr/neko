@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"embed"
+	"fmt"
 	"image"
 	_ "image/png"
 	"io"
@@ -34,6 +35,12 @@ type neko struct {
 	sprite     string
 	lastSprite string
 	img        *ebiten.Image
+
+	cfg           *Config
+	sprites       map[string]*ebiten.Image
+	sounds        map[string][]byte
+	audioContext  *audio.Context
+	currentPlayer *audio.Player
 }
 
 type Config struct {
@@ -44,65 +51,66 @@ type Config struct {
 }
 
 const (
-	width  = 32
-	height = 32
+	width       = 32
+	height      = 32
+	sampleRate  = 44100
+	soundVolume = 0.3
 )
 
 var (
-	loaded  = false
-	mSprite map[string]*ebiten.Image
-	mSound  map[string][]byte
-
 	//go:embed assets/*
 	f embed.FS
-
-	monitorWidth, monitorHeight = ebiten.Monitor().Size()
-
-	cfg = &Config{}
-
-	currentplayer *audio.Player = nil
 )
 
 func (m *neko) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return width, height
 }
 
-func playSound(sound []byte) {
-	if cfg.Quiet {
+func (m *neko) playSound(soundName string) {
+	if m.cfg.Quiet {
 		return
 	}
-	if currentplayer != nil && currentplayer.IsPlaying() {
-		currentplayer.Close()
+	sound, ok := m.sounds[soundName]
+	if !ok {
+		return
 	}
-	currentplayer = audio.CurrentContext().NewPlayerFromBytes(sound)
-	currentplayer.SetVolume(.3)
-	currentplayer.Play()
+	if m.currentPlayer != nil && m.currentPlayer.IsPlaying() {
+		_ = m.currentPlayer.Close()
+	}
+	m.currentPlayer = m.audioContext.NewPlayerFromBytes(sound)
+	m.currentPlayer.SetVolume(soundVolume)
+	m.currentPlayer.Play()
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func (m *neko) Update() error {
 	m.count++
 	if m.state == 10 && m.count == m.min {
-		playSound(mSound["idle3"])
+		m.playSound("idle3")
 	}
+
 	// Prevents neko from being stuck on the side of the screen
 	// or randomly travelling to another monitor
-	m.x = max(0, min(m.x, float64(monitorWidth)))
-	m.y = max(0, min(m.y, float64(monitorHeight)))
+	monitorWidth, monitorHeight := ebiten.Monitor().Size()
+	windowWidth, windowHeight := ebiten.WindowSize()
+	maxX := float64(max(0, monitorWidth-windowWidth))
+	maxY := float64(max(0, monitorHeight-windowHeight))
+
+	m.x = max(0, min(m.x, maxX))
+	m.y = max(0, min(m.y, maxY))
 	ebiten.SetWindowPosition(int(math.Round(m.x)), int(math.Round(m.y)))
 
 	mx, my := ebiten.CursorPosition()
-	x := mx - (height / 2)
-	y := my - (width / 2)
+	x := mx - (width / 2)
+	y := my - (height / 2)
 
-	dy, dx := y, x
-	if dy < 0 {
-		dy = -dy
-	}
-	if dx < 0 {
-		dx = -dx
-	}
-
-	m.distance = dx + dy
+	m.distance = absInt(x) + absInt(y)
 	if m.distance < width || m.waiting {
 		m.stayIdle()
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
@@ -112,7 +120,7 @@ func (m *neko) Update() error {
 	}
 
 	if m.state >= 13 {
-		playSound(mSound["awake"])
+		m.playSound("awake")
 	}
 	m.catchCursor(x, y)
 	return nil
@@ -123,8 +131,7 @@ func (m *neko) stayIdle() {
 	switch m.state {
 	case 0:
 		m.state = 1
-		fallthrough
-
+		m.sprite = "awake"
 	case 1, 2, 3:
 		m.sprite = "awake"
 
@@ -155,32 +162,32 @@ func (m *neko) catchCursor(x, y int) {
 
 	switch {
 	case a <= 292.5 && a > 247.5: // up
-		m.y -= cfg.Speed
+		m.y -= m.cfg.Speed
 		m.sprite = "up"
 	case a <= 337.5 && a > 292.5: // up right
-		m.x += cfg.Speed / math.Sqrt2
-		m.y -= cfg.Speed / math.Sqrt2
+		m.x += m.cfg.Speed / math.Sqrt2
+		m.y -= m.cfg.Speed / math.Sqrt2
 		m.sprite = "upright"
 	case a <= 22.5 || a > 337.5: // right
-		m.x += cfg.Speed
+		m.x += m.cfg.Speed
 		m.sprite = "right"
 	case a <= 67.5 && a > 22.5: // down right
-		m.x += cfg.Speed / math.Sqrt2
-		m.y += cfg.Speed / math.Sqrt2
+		m.x += m.cfg.Speed / math.Sqrt2
+		m.y += m.cfg.Speed / math.Sqrt2
 		m.sprite = "downright"
 	case a <= 112.5 && a > 67.5: // down
-		m.y += cfg.Speed
+		m.y += m.cfg.Speed
 		m.sprite = "down"
 	case a <= 157.5 && a > 112.5: // down left
-		m.x -= cfg.Speed / math.Sqrt2
-		m.y += cfg.Speed / math.Sqrt2
+		m.x -= m.cfg.Speed / math.Sqrt2
+		m.y += m.cfg.Speed / math.Sqrt2
 		m.sprite = "downleft"
 	case a <= 202.5 && a > 157.5: // left
-		m.x -= cfg.Speed
+		m.x -= m.cfg.Speed
 		m.sprite = "left"
 	case a <= 247.5 && a > 202.5: // up left
-		m.x -= cfg.Speed
-		m.y -= cfg.Speed
+		m.x -= m.cfg.Speed / math.Sqrt2
+		m.y -= m.cfg.Speed / math.Sqrt2
 		m.sprite = "upleft"
 	}
 }
@@ -196,7 +203,7 @@ func (m *neko) Draw(screen *ebiten.Image) {
 		sprite = m.sprite + "2"
 	}
 
-	m.img = mSprite[sprite]
+	m.img = m.sprites[sprite]
 
 	if m.count > m.max {
 		m.count = 0
@@ -205,7 +212,7 @@ func (m *neko) Draw(screen *ebiten.Image) {
 			m.state++
 			switch m.state {
 			case 13:
-				playSound(mSound["sleep"])
+				m.playSound("sleep")
 			}
 		}
 	}
@@ -221,54 +228,82 @@ func (m *neko) Draw(screen *ebiten.Image) {
 	screen.DrawImage(m.img, nil)
 }
 
-func main() {
-	config.PrefixEnv = "NEKO"
-	config.File = "neko.ini"
-	config.Parse(cfg)
+func loadAssets(assetsFS fs.FS, sampleRate int) (map[string]*ebiten.Image, map[string][]byte, error) {
+	sprites := make(map[string]*ebiten.Image)
+	sounds := make(map[string][]byte)
 
-	mSprite = make(map[string]*ebiten.Image)
-	mSound = make(map[string][]byte)
+	entries, err := fs.ReadDir(assetsFS, "assets")
+	if err != nil {
+		return nil, nil, fmt.Errorf("read assets directory: %w", err)
+	}
 
-	a, _ := fs.ReadDir(f, "assets")
-	for _, v := range a {
-		data, _ := f.ReadFile("assets/" + v.Name())
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
 
-		name := strings.TrimSuffix(v.Name(), filepath.Ext(v.Name()))
-		ext := filepath.Ext(v.Name())
+		path := filepath.Join("assets", entry.Name())
+		data, err := fs.ReadFile(assetsFS, path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read %q: %w", path, err)
+		}
 
-		switch ext {
+		name := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		switch filepath.Ext(entry.Name()) {
 		case ".png":
 			img, _, err := image.Decode(bytes.NewReader(data))
 			if err != nil {
-				log.Fatal(err)
+				return nil, nil, fmt.Errorf("decode sprite %q: %w", entry.Name(), err)
 			}
+			sprites[name] = ebiten.NewImageFromImage(img)
 
-			mSprite[name] = ebiten.NewImageFromImage(img)
 		case ".wav":
-			stream, err := wav.DecodeWithSampleRate(44100, bytes.NewReader(data))
+			stream, err := wav.DecodeWithSampleRate(sampleRate, bytes.NewReader(data))
 			if err != nil {
-				log.Fatal(err)
+				return nil, nil, fmt.Errorf("decode sound %q: %w", entry.Name(), err)
 			}
-			data, err := io.ReadAll(stream)
+			soundData, err := io.ReadAll(stream)
 			if err != nil {
-				log.Fatal(err)
+				return nil, nil, fmt.Errorf("read sound %q: %w", entry.Name(), err)
 			}
-
-			mSound[name] = data
+			sounds[name] = soundData
 		}
 	}
 
-	audio.NewContext(44100)
+	return sprites, sounds, nil
+}
+
+func main() {
+	cfg := &Config{}
+
+	config.PrefixEnv = "NEKO"
+	config.File = "neko.ini"
+	if err := config.Parse(cfg); err != nil {
+		log.Fatal(err)
+	}
+
+	sprites, sounds, err := loadAssets(f, sampleRate)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	audioContext := audio.NewContext(sampleRate)
 
 	// Workaround: for some reason playing the first sound can incur significant delay.
 	// So let's do this at the start.
-	audio.CurrentContext().NewPlayerFromBytes([]byte{}).Play()
+	audioContext.NewPlayerFromBytes([]byte{}).Play()
+
+	monitorWidth, monitorHeight := ebiten.Monitor().Size()
 
 	n := &neko{
-		x:   float64(monitorWidth / 2),
-		y:   float64(monitorHeight / 2),
-		min: 8,
-		max: 16,
+		x:            float64(monitorWidth / 2),
+		y:            float64(monitorHeight / 2),
+		min:          8,
+		max:          16,
+		cfg:          cfg,
+		sprites:      sprites,
+		sounds:       sounds,
+		audioContext: audioContext,
 	}
 
 	ebiten.SetRunnableOnUnfocused(true)
@@ -281,7 +316,7 @@ func main() {
 	ebiten.SetWindowSize(int(float64(width)*cfg.Scale), int(float64(height)*cfg.Scale))
 	ebiten.SetWindowTitle("Neko")
 
-	err := ebiten.RunGameWithOptions(n, &ebiten.RunGameOptions{
+	err = ebiten.RunGameWithOptions(n, &ebiten.RunGameOptions{
 		InitUnfocused:     true,
 		ScreenTransparent: true,
 		SkipTaskbar:       true,
